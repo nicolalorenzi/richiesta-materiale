@@ -6,33 +6,77 @@
   <title>Richiesta Materiale (Interna)</title>
   <meta name="theme-color" content="#111111" />
   <style>
-    *, *::before, *::after {box-sizing: border-box;}
-
     :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    * , *::before, *::after { box-sizing: border-box; }
+
     body { margin: 0; background:#f6f6f6; color:#111; }
-    .app { max-width: 720px; margin: 0 auto; padding: 16px; }
+    .app { max-width: 720px; margin: 0 auto; padding: 16px; overflow-x:hidden; }
     .card { background:#fff; border-radius: 14px; padding: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.06); }
-    h1 { font-size: 18px; margin: 0 0 12px; }
-    label { display:block; font-size: 12px; font-weight: 600; margin: 10px 0 6px; }
-    input, textarea { width:100%; padding: 12px; border:1px solid #ddd; border-radius: 12px; font-size: 16px; background:#fff; }
-    .row { display:flex; gap:10px; }
-    .row > * { flex:1; }
+    h1 { font-size: 18px; margin: 0 0 12px; text-transform: uppercase; letter-spacing:.2px; }
+
+    label { display:block; font-size: 12px; font-weight: 700; margin: 10px 0 6px; }
+    input, textarea {
+      width:100%;
+      padding: 12px;
+      border:1px solid #ddd;
+      border-radius: 12px;
+      font-size: 16px;
+      background:#fff;
+    }
+
+    .row { display:flex; gap:10px; flex-wrap:wrap; min-width:0; }
+    .row > * { flex:1; min-width:0; }
+
     .muted { color:#666; font-size: 12px; margin-top: 8px; }
-    .items { margin-top: 12px; display:flex; flex-direction: column; gap:10px; }
-    .item { border:1px solid #eee; border-radius: 14px; padding: 10px; }
-    .item .row { align-items: center; }
+    .items { margin-top: 12px; display:flex; flex-direction: column; gap:12px; }
+    .item { border:1px solid #eee; border-radius: 14px; padding: 12px; overflow:hidden; }
+
     .btns { display:flex; gap:10px; flex-wrap: wrap; margin-top: 12px; }
-    button { border:0; border-radius: 12px; padding: 12px 14px; font-size: 14px; font-weight: 700; cursor: pointer; }
+    button {
+      border:0; border-radius: 12px; padding: 12px 14px;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+    }
     .primary { background:#111; color:#fff; }
     .ghost { background:#eee; color:#111; }
     .danger { background:#ffefef; color:#b00020; }
+
     textarea { min-height: 160px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 
-    /* Scanner UI */
-    .code-actions { display:flex; gap:8px; align-items:center; }
-    .scan-btn { padding: 10px 12px; border-radius: 12px; background:#eee; font-weight:800; }
+    /* ---- Layout riga articolo richiesto ---- */
+    .item-grid { display: grid; gap: 10px; }
+    .code-block { min-width: 0; }
+    .code-actions { display:flex; gap:8px; align-items:center; min-width:0; }
+    .code-actions input.code { flex: 1 1 auto; min-width:0; }
+
+    /* Bottone camera e X della stessa misura */
+    .scan-btn, .del-btn {
+      width: 44px; height: 44px;
+      padding: 0;
+      border-radius: 12px;
+      display:flex; align-items:center; justify-content:center;
+      font-weight: 900;
+    }
+    .scan-btn { background:#eee; color:#111; }
     .scan-btn:active { transform: scale(.99); }
 
+    .qty-del { display:flex; gap:10px; align-items:flex-end; }
+    .qty-block { flex: 0 0 auto; }
+    .qty-block input.qty { width: 90px; } /* 4 cifre comode */
+    .del-btn { background:#ffefef; color:#b00020; }
+    .del-btn:active { transform: scale(.99); }
+
+    /* Mobile: codice+camera sopra, quantità+X sotto */
+    @media (max-width: 520px) {
+      .item-grid { grid-template-columns: 1fr; }
+      .qty-del { justify-content: flex-start; }
+    }
+
+    /* Tablet/Desktop: codice grande a sinistra, qty+X a destra */
+    @media (min-width: 521px) {
+      .item-grid { grid-template-columns: 1fr auto; align-items:end; }
+    }
+
+    /* ---- Scanner modal ---- */
     .modal {
       position: fixed; inset: 0; display:none;
       background: rgba(0,0,0,.55); z-index: 9999;
@@ -55,7 +99,6 @@
     video { width:100%; height:auto; display:block; }
     .hint {
       position:absolute;
-      /* riquadro "orizzontale" per barcode */
       left: 10%; right: 10%;
       top: 40%; bottom: 40%;
       border: 2px solid rgba(255,255,255,.85);
@@ -64,7 +107,7 @@
       pointer-events:none;
     }
     .scan-status { margin-top: 10px; font-size: 12px; color:#666; display:flex; gap:10px; flex-wrap:wrap; }
-    .pill { padding: 6px 10px; border-radius: 999px; background:#f1f1f1; font-size:12px; font-weight:700; }
+    .pill { padding: 6px 10px; border-radius: 999px; background:#f1f1f1; font-size:12px; font-weight:800; }
     .pill.bad { background:#ffe8e8; color:#b00020; }
 
     @media print {
@@ -79,7 +122,7 @@
 <body>
   <div class="app">
     <div class="card no-print">
-      <h1>RICHIESTA INTERNA MATERIALE</h1>
+      <h1>Richiesta interna materiale</h1>
 
       <div class="row">
         <div>
@@ -88,7 +131,7 @@
         </div>
         <div>
           <label for="operator">Operatore</label>
-          <input id="operator" placeholder="Es. Marco Rossi" />
+          <input id="operator" placeholder="Es. Marco Rossi" autocomplete="name" />
         </div>
       </div>
 
@@ -98,7 +141,7 @@
         <button class="ghost" id="addRow" type="button">+ Aggiungi riga</button>
       </div>
 
-      <hr style="margin: 3vh 0;">
+      <hr style="border:0;border-top:1px solid #eee;margin:16px 0;" />
 
       <div class="btns">
         <button class="primary" id="generate" type="button">Genera richiesta</button>
@@ -114,9 +157,9 @@
     </div>
 
     <div class="card" style="margin-top:14px;">
-      <h1>Output</h1>
+      <h1 style="text-transform:none;">Output</h1>
       <label for="output">Testo richiesta</label>
-      <textarea id="output" placeholder="Premi “Genera richiesta”..."></textarea>
+      <textarea id="output" placeholder="Premi “Genera richiesta”…"></textarea>
     </div>
   </div>
 
@@ -137,7 +180,7 @@
           <span class="pill" id="lastCodePill">Ultimo: —</span>
         </div>
         <div class="muted" style="margin-top:8px;">
-          Consiglio: ruota il telefono in orizzontale, inquadra il codice dentro il riquadro e resta fermo 1–2 secondi.
+          Ruota il telefono in orizzontale, inquadra il codice dentro il riquadro e resta fermo 1–2 secondi.
         </div>
       </div>
     </div>
@@ -169,25 +212,28 @@
     const div = document.createElement("div");
     div.className = "item";
     div.innerHTML = `
-      <div class="row">
-        <div>
+      <div class="item-grid">
+        <div class="code-block">
           <label>Codice</label>
           <div class="code-actions">
             <input class="code" placeholder="Codice articolo" value="${escapeHtml(code)}" autocomplete="off" />
             <button class="scan-btn scan" type="button" title="Scansiona">📷</button>
           </div>
         </div>
-        <div style="max-width:140px;">
-          <label>Q.tà</label>
-          <input class="qty" type="number" min="0" step="1" placeholder="0" value="${escapeHtml(String(qty))}" />
-        </div>
-        <div style="max-width:90px; align-self:flex-end;">
-          <button class="danger del" type="button" style="width:100%;">✕</button>
+
+        <div class="qty-del">
+          <div class="qty-block">
+            <label>Q.tà</label>
+            <input class="qty" type="number" min="0" max="9999" step="1" inputmode="numeric"
+                   placeholder="0" value="${escapeHtml(String(qty))}" />
+          </div>
+          <button class="del-btn del" type="button" title="Elimina riga">✕</button>
         </div>
       </div>
     `;
 
     div.querySelector(".del").addEventListener("click", () => div.remove());
+
     const codeInput = div.querySelector(".code");
     div.querySelector(".scan").addEventListener("click", () => openScannerFor(codeInput));
 
@@ -262,7 +308,7 @@
   }
 
   /** =========================
-   *  SCANNER BARCODE (camera) - migliorato per CODE39 orizzontale
+   *  SCANNER BARCODE (camera) - ottimizzato per CODE39 orizzontale
    *  ========================= */
   let activeCodeInput = null;
   let scanStream = null;
@@ -270,7 +316,6 @@
   let barcodeDetector = null;
   let lastDetected = { value: null, ts: 0 };
 
-  // canvas per crop
   const cropCanvas = document.createElement("canvas");
   const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
 
@@ -280,7 +325,6 @@
   }
 
   function cleanCode(raw) {
-    // rimuove asterischi tipici Code39 + spazi
     return (raw || "").trim().replace(/^\*+|\*+$/g, "").replace(/\s+/g, "");
   }
 
@@ -309,7 +353,6 @@
       return;
     }
 
-    // Forza formati (molto importante per Code39)
     barcodeDetector = new window.BarcodeDetector({
       formats: ["code_39", "code_128", "ean_13", "ean_8", "itf", "upc_a", "upc_e", "qr_code"]
     });
@@ -335,7 +378,7 @@
       els.scanVideo.srcObject = scanStream;
       await els.scanVideo.play();
 
-      // Prova ad attivare zoom (se supportato)
+      // Zoom (se disponibile)
       const track = scanStream.getVideoTracks()[0];
       const caps = track.getCapabilities?.() || {};
       if (caps.zoom) {
@@ -359,10 +402,10 @@
       if (!v || v.readyState < 2) return;
 
       try {
-        // Crop centrale: molto meglio per barcode orizzontale
         const vw = v.videoWidth, vh = v.videoHeight;
         if (!vw || !vh) return;
 
+        // crop centrale "orizzontale"
         const cropW = Math.floor(vw * 0.78);
         const cropH = Math.floor(vh * 0.22);
         const sx = Math.floor((vw - cropW) / 2);
@@ -386,14 +429,12 @@
 
         if (activeCodeInput) {
           activeCodeInput.value = raw;
-          const qtyInput = activeCodeInput.closest(".row")?.querySelector(".qty");
+          const qtyInput = activeCodeInput.closest(".item")?.querySelector(".qty");
           if (qtyInput) qtyInput.focus();
         }
 
         closeScanner();
-      } catch (e) {
-        // ignora errori sporadici
-      }
+      } catch {}
     }, 180);
   }
 
