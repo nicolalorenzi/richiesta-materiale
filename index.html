@@ -34,7 +34,7 @@
     .btns { display:flex; gap:10px; flex-wrap: wrap; margin-top: 12px; }
     button {
       border:0; border-radius: 12px; padding: 12px 14px;
-      font-size: 14px; font-weight: 600; cursor: pointer;
+      font-size: 14px; font-weight: 800; cursor: pointer;
     }
     .primary { background:#111; color:#fff; }
     .ghost { background:#eee; color:#111; }
@@ -42,7 +42,7 @@
 
     textarea { min-height: 160px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 
-    /* ---- Layout riga articolo richiesto ---- */
+    /* ---- Layout riga articolo ---- */
     .item-grid { display: grid; gap: 10px; }
     .code-block { min-width: 0; }
     .code-actions { display:flex; gap:8px; align-items:center; min-width:0; }
@@ -235,7 +235,37 @@
     div.querySelector(".del").addEventListener("click", () => div.remove());
 
     const codeInput = div.querySelector(".code");
+    const qtyInput  = div.querySelector(".qty");
+
     div.querySelector(".scan").addEventListener("click", () => openScannerFor(codeInput));
+
+    function maybeAddNextRow() {
+      const code = codeInput.value.trim();
+      const qty  = qtyInput.value.trim();
+
+      if (!code) return;
+      if (qty === "" || Number.isNaN(Number(qty))) return;
+
+      // aggiunge riga solo se questa è l'ultima
+      const isLast = div === els.items.lastElementChild;
+      if (!isLast) return;
+
+      addItemRow();
+      const newRow = els.items.lastElementChild;
+      const newCode = newRow?.querySelector(".code");
+      if (newCode) newCode.focus();
+    }
+
+    qtyInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        maybeAddNextRow();
+      }
+    });
+
+    qtyInput.addEventListener("blur", () => {
+      setTimeout(maybeAddNextRow, 0);
+    });
 
     els.items.appendChild(div);
   }
@@ -303,8 +333,7 @@
     els.operator.value = "";
     els.items.innerHTML = "";
     els.output.value = "";
-    addItemRow();
-    addItemRow();
+    addItemRow(); // 1 sola riga
   }
 
   /** =========================
@@ -429,7 +458,10 @@
 
         if (activeCodeInput) {
           activeCodeInput.value = raw;
-          const qtyInput = activeCodeInput.closest(".item")?.querySelector(".qty");
+
+          // focus sulla quantità della stessa riga
+          const item = activeCodeInput.closest(".item");
+          const qtyInput = item?.querySelector(".qty");
           if (qtyInput) qtyInput.focus();
         }
 
@@ -471,8 +503,7 @@
   els.print.addEventListener("click", () => { if (!els.output.value.trim()) generateText(); window.print(); });
   els.reset.addEventListener("click", resetAll);
 
-  // init
-  addItemRow();
+  // init: 1 sola riga
   addItemRow();
 </script>
 </body>
