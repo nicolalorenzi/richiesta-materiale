@@ -213,7 +213,6 @@ function getLogoExtension(url) {
   const u = (url || "").toLowerCase();
   if (u.endsWith(".png")) return "png";
   if (u.endsWith(".jpg") || u.endsWith(".jpeg")) return "jpeg";
-  // fallback: prova jpeg
   return "jpeg";
 }
 
@@ -289,6 +288,12 @@ async function buildExcelAndDownload() {
     { width: 18 },  // E
   ];
 
+  // ✅ Più spazio verticale al blocco logo (così si vede bene e non "esce")
+  ws.getRow(1).height = 28;
+  ws.getRow(2).height = 28;
+  ws.getRow(3).height = 28;
+  ws.getRow(4).height = 28;
+
   // Header: logo A1:B4, titolo A5:E5, box doc info D1:E3
   ws.mergeCells("A1:B4");
   ws.mergeCells("A5:E5");
@@ -321,28 +326,48 @@ async function buildExcelAndDownload() {
     c.alignment = { vertical: "middle", horizontal: "right" };
   });
 
-  // Logo
+  // ✅ Logo: "contain" automatico dentro A1:B4 (NO deformazione, NO overflow)
   try {
     const logoBase64 = await fetchAsBase64(LOGO_URL);
     const ext = getLogoExtension(LOGO_URL);
     const mime = ext === "png" ? "image/png" : "image/jpeg";
+
+    // Leggo dimensioni reali del logo
+    const img = new Image();
+    img.src = `data:${mime};base64,${logoBase64}`;
+    await new Promise((res, rej) => {
+      img.onload = res;
+      img.onerror = rej;
+    });
+
+    const logoW = img.naturalWidth || 800;
+    const logoH = img.naturalHeight || 300;
+
+    // Area target: A1:B4 (stimata in pixel)
+    const colA = ws.getColumn(1).width || 18;
+    const colB = ws.getColumn(2).width || 28;
+    const targetWpx = (colA + colB) * 7 - 14; // padding laterale
+
+    const r1 = ws.getRow(1).height || 18;
+    const r2 = ws.getRow(2).height || 18;
+    const r3 = ws.getRow(3).height || 18;
+    const r4 = ws.getRow(4).height || 18;
+    const targetHpx = (r1 + r2 + r3 + r4) * 1.33 - 14; // padding verticale
+
+    const scale = Math.min(targetWpx / logoW, targetHpx / logoH);
+    const drawW = Math.max(10, Math.floor(logoW * scale));
+    const drawH = Math.max(10, Math.floor(logoH * scale));
 
     const imageId = wb.addImage({
       base64: `data:${mime};base64,${logoBase64}`,
       extension: ext
     });
 
-   // Dimensioni logo mantenendo proporzioni
-   ws.addImage(imageId, {
-     tl: { col: 0.2, row: 0.3 },   // top-left
-     ext: {
-       width: 240,   // 🔧 larghezza in px (modifica qui se vuoi)
-       height: 90    // 🔧 altezza proporzionata
-     }
-   });
-     
+    ws.addImage(imageId, {
+      tl: { col: 0.18, row: 0.20 }, // leggero padding
+      ext: { width: drawW, height: drawH }
+    });
   } catch (e) {
-    // se manca logo, non blocchiamo tutto
     console.warn(e);
   }
 
