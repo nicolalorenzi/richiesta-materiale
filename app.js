@@ -1,7 +1,10 @@
 const EMAIL_TO = "acquisti@oleodinamicaseguini.it";
 
+// ✅ Metti il tuo logo qui (jpg/jpeg/png) nella stessa cartella di index.html
+const LOGO_URL = "./logo.jpg"; // es: "./logo.png" se usi PNG
+
 /* =========================
-   Modulo – righe fisse (mail)
+   Modulo – righe fisse (mail + excel)
    ========================= */
 const DOC_INFO = {
   mod: "Mod. 07-05.01",
@@ -74,7 +77,6 @@ function mustExist(el, name) {
   return el;
 }
 
-// Fail fast se mancano pezzi in HTML
 [
   ["supplier", els.supplier],
   ["operator", els.operator],
@@ -205,11 +207,45 @@ function generateText() {
 }
 
 /* =========================
-   Excel
+   ExcelJS helpers (logo/stile A4)
    ========================= */
-function buildExcelAndDownload() {
-  if (!window.XLSX) {
-    alert("Libreria Excel non caricata. Controlla connessione o blocchi script.");
+function getLogoExtension(url) {
+  const u = (url || "").toLowerCase();
+  if (u.endsWith(".png")) return "png";
+  if (u.endsWith(".jpg") || u.endsWith(".jpeg")) return "jpeg";
+  // fallback: prova jpeg
+  return "jpeg";
+}
+
+async function fetchAsBase64(url) {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error("Logo non trovato: " + url);
+  const buf = await res.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(buf);
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function borderAll(style = "thin") {
+  return {
+    top: { style }, left: { style }, bottom: { style }, right: { style }
+  };
+}
+
+/* =========================
+   Excel (A4 stampabile + logo + stile) — ExcelJS
+   ========================= */
+async function buildExcelAndDownload() {
+  if (!window.ExcelJS) {
+    alert("ExcelJS non caricato. Controlla connessione o blocchi script.");
+    return null;
+  }
+  if (!window.saveAs) {
+    alert("FileSaver non caricato. Controlla connessione o blocchi script.");
     return null;
   }
 
@@ -220,27 +256,163 @@ function buildExcelAndDownload() {
   const nowText = formatNowText();
   const dateForFile = formatDateForFile();
 
-  const aoa = [
-    ["ORDINE FORNITORE"],
-    ["Fornitore", supplier],
-    ["Operatore", operator],
-    ["Data/Ora", nowText],
-    [],
-    ["Codice", "Q.tà"],
-    ...items.map((i) => [i.code, (i.qty === "" || Number.isNaN(i.qty)) ? "" : i.qty]),
-  ];
-
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = [{ wch: 30 }, { wch: 10 }];
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Ordine");
-
   const safeSupplier = sanitizeFilePart(supplier);
   const filename = `ORDINE ${safeSupplier} - ${dateForFile}.xlsx`;
 
-  XLSX.writeFile(wb, filename);
-  return { filename, nowText, ...data };
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Richiesta Materiale (Web App)";
+  wb.created = new Date();
+
+  const ws = wb.addWorksheet("Ordine", {
+    pageSetup: {
+      paperSize: 9,            // A4
+      orientation: "portrait",
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 1
+    },
+    properties: { defaultRowHeight: 18 }
+  });
+
+  ws.pageSetup.margins = {
+    left: 0.5, right: 0.5,
+    top: 0.6, bottom: 0.6,
+    header: 0.2, footer: 0.2
+  };
+
+  // Colonne (layout modulo)
+  ws.columns = [
+    { width: 18 },  // A
+    { width: 28 },  // B
+    { width: 6  },  // C spacer
+    { width: 22 },  // D
+    { width: 18 },  // E
+  ];
+
+  // Header: logo A1:B4, titolo A5:E5, box doc info D1:E3
+  ws.mergeCells("A1:B4");
+  ws.mergeCells("A5:E5");
+  ws.mergeCells("D1:E1");
+  ws.mergeCells("D2:E2");
+  ws.mergeCells("D3:E3");
+
+  // Bordo area header A1:E5
+  for (let r = 1; r <= 5; r++) {
+    for (let c = 1; c <= 5; c++) {
+      const cell = ws.getCell(r, c);
+      cell.border = borderAll("thin");
+      cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+    }
+  }
+
+  // Titolo
+  const titleCell = ws.getCell("A5");
+  titleCell.value = "ORDINE FORNITORE";
+  titleCell.font = { bold: true, size: 14 };
+  titleCell.alignment = { vertical: "middle", horizontal: "center" };
+
+  // Doc info (a destra)
+  ws.getCell("D1").value = DOC_INFO.mod;
+  ws.getCell("D2").value = DOC_INFO.rev;
+  ws.getCell("D3").value = DOC_INFO.agg;
+  ["D1","D2","D3"].forEach(addr => {
+    const c = ws.getCell(addr);
+    c.font = { bold: true, size: 10 };
+    c.alignment = { vertical: "middle", horizontal: "right" };
+  });
+
+  // Logo
+  try {
+    const logoBase64 = await fetchAsBase64(LOGO_URL);
+    const ext = getLogoExtension(LOGO_URL);
+    const mime = ext === "png" ? "image/png" : "image/jpeg";
+
+    const imageId = wb.addImage({
+      base64: `data:${mime};base64,${logoBase64}`,
+      extension: ext
+    });
+
+    // posizionamento dentro A1:B4
+    ws.addImage(imageId, {
+      tl: { col: 0.15, row: 0.15 },
+      br: { col: 2.0,  row: 3.9 }
+    });
+  } catch (e) {
+    // se manca logo, non blocchiamo tutto
+    console.warn(e);
+  }
+
+  // Dati fornitore / operatore / data
+  ws.getCell("A7").value = "Fornitore:";
+  ws.getCell("B7").value = supplier;
+  ws.getCell("A8").value = "Operatore:";
+  ws.getCell("B8").value = operator;
+  ws.getCell("A9").value = "Data/Ora:";
+  ws.getCell("B9").value = nowText;
+  ["A7","A8","A9"].forEach(addr => ws.getCell(addr).font = { bold: true });
+
+  for (let r = 7; r <= 9; r++) {
+    for (let c = 1; c <= 5; c++) {
+      const cell = ws.getCell(r, c);
+      cell.border = borderAll("thin");
+      cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      if (c >= 3 && cell.value == null) cell.value = ""; // pulizia area CDE
+    }
+  }
+
+  ws.getRow(10).height = 10;
+
+  // Tabella
+  const startRow = 11;
+
+  ws.getCell(`A${startRow}`).value = "Codice";
+  ws.getCell(`B${startRow}`).value = "Q.tà";
+
+  ["A","B"].forEach(col => {
+    const cell = ws.getCell(`${col}${startRow}`);
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111111" } };
+    cell.border = borderAll("thin");
+    cell.alignment = { vertical: "middle", horizontal: col === "A" ? "left" : "center" };
+  });
+
+  ws.getRow(startRow).height = 20;
+
+  items.forEach((it, i) => {
+    const r = startRow + 1 + i;
+
+    ws.getCell(`A${r}`).value = String(it.code || "");
+    ws.getCell(`B${r}`).value = (it.qty === "" || Number.isNaN(it.qty)) ? "" : Number(it.qty);
+
+    ws.getCell(`A${r}`).border = borderAll("thin");
+    ws.getCell(`B${r}`).border = borderAll("thin");
+    ws.getCell(`A${r}`).alignment = { vertical: "middle", horizontal: "left" };
+    ws.getCell(`B${r}`).alignment = { vertical: "middle", horizontal: "center" };
+  });
+
+  // cornice “modulo” anche su CDE (esteticamente pulito)
+  const endRow = startRow + items.length;
+  for (let r = startRow; r <= endRow; r++) {
+    for (let c = 3; c <= 5; c++) {
+      const cell = ws.getCell(r, c);
+      if (cell.value == null) cell.value = "";
+      cell.border = borderAll("thin");
+    }
+  }
+
+  const footerRow = endRow + 2;
+  ws.mergeCells(`A${footerRow}:E${footerRow}`);
+  ws.getCell(`A${footerRow}`).value = `Totale righe: ${items.length}`;
+  ws.getCell(`A${footerRow}`).font = { italic: true, size: 10 };
+  ws.getCell(`A${footerRow}`).alignment = { horizontal: "right" };
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  });
+  saveAs(blob, filename);
+
+  return { filename, nowText, supplier, operator, items };
 }
 
 /* =========================
@@ -264,6 +436,8 @@ function openEmailDraft({ supplier, operator, nowText, items, filename }) {
   lines.push(`Operatore: ${operator}`);
   lines.push(`Data/Ora: ${nowText}`);
   lines.push(`File: ${filename}`);
+  lines.push("");
+  lines.push("⚠️ Ricordati di allegare il file Excel appena scaricato.");
   lines.push("");
   lines.push("Riepilogo righe:");
   items.forEach((it, idx) => {
@@ -377,7 +551,6 @@ async function openScannerFor(codeInput) {
     els.scanVideo.srcObject = scanStream;
     await els.scanVideo.play();
 
-    // Zoom se disponibile
     const track = scanStream.getVideoTracks()[0];
     const caps = track.getCapabilities?.() || {};
     if (caps.zoom) {
@@ -404,7 +577,6 @@ function startDetectLoop() {
       const vw = v.videoWidth, vh = v.videoHeight;
       if (!vw || !vh) return;
 
-      // crop centrale "orizzontale"
       const cropW = Math.floor(vw * 0.78);
       const cropH = Math.floor(vh * 0.22);
       const sx = Math.floor((vw - cropW) / 2);
@@ -428,8 +600,6 @@ function startDetectLoop() {
 
       if (activeCodeInput) {
         activeCodeInput.value = raw;
-
-        // focus sulla quantità della stessa riga
         const item = activeCodeInput.closest("[data-item]") || activeCodeInput.closest(".item");
         const qtyInput = item?.querySelector("[data-qty]") || item?.querySelector(".qty");
         if (qtyInput) qtyInput.focus();
@@ -487,7 +657,6 @@ els.items.addEventListener("click", (e) => {
   }
 });
 
-// Enter su quantità -> auto-add + scanner nuova riga
 els.items.addEventListener("keydown", (e) => {
   if (!e.target.matches("input[data-qty]")) return;
   if (e.key !== "Enter") return;
@@ -497,7 +666,6 @@ els.items.addEventListener("keydown", (e) => {
   if (row) maybeAddNextRowAndOpenScanner(row);
 });
 
-// Blur quantità -> stesso comportamento
 els.items.addEventListener(
   "blur",
   (e) => {
@@ -519,10 +687,16 @@ els.scanModal.addEventListener("click", (e) => {
 els.addRow.addEventListener("click", () => addItemRow());
 els.generate.addEventListener("click", generateText);
 
-els.emailExcel.addEventListener("click", () => {
-  const info = buildExcelAndDownload();
-  if (!info) return;
-  openEmailDraft(info);
+// ✅ ora async perché ExcelJS genera buffer
+els.emailExcel.addEventListener("click", async () => {
+  try {
+    const info = await buildExcelAndDownload();
+    if (!info) return;
+    openEmailDraft(info);
+  } catch (e) {
+    console.error(e);
+    alert("Errore creazione Excel. Controlla che il logo esista e che le librerie siano caricate.");
+  }
 });
 
 els.copy.addEventListener("click", copyText);
