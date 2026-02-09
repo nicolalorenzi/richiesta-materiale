@@ -332,11 +332,15 @@ async function buildExcelAndDownload() {
       extension: ext
     });
 
-    // posizionamento dentro A1:B4
-    ws.addImage(imageId, {
-      tl: { col: 0.15, row: 0.15 },
-      br: { col: 2.0,  row: 3.9 }
-    });
+   // Dimensioni logo mantenendo proporzioni
+   ws.addImage(imageId, {
+     tl: { col: 0.2, row: 0.3 },   // top-left
+     ext: {
+       width: 240,   // 🔧 larghezza in px (modifica qui se vuoi)
+       height: 90    // 🔧 altezza proporzionata
+     }
+   });
+     
   } catch (e) {
     // se manca logo, non blocchiamo tutto
     console.warn(e);
