@@ -332,7 +332,6 @@ async function buildExcelAndDownload() {
     const ext = getLogoExtension(LOGO_URL);
     const mime = ext === "png" ? "image/png" : "image/jpeg";
 
-    // Leggo dimensioni reali del logo
     const img = new Image();
     img.src = `data:${mime};base64,${logoBase64}`;
     await new Promise((res, rej) => {
@@ -343,16 +342,15 @@ async function buildExcelAndDownload() {
     const logoW = img.naturalWidth || 800;
     const logoH = img.naturalHeight || 300;
 
-    // Area target: A1:B4 (stimata in pixel)
     const colA = ws.getColumn(1).width || 18;
     const colB = ws.getColumn(2).width || 28;
-    const targetWpx = (colA + colB) * 7 - 14; // padding laterale
+    const targetWpx = (colA + colB) * 7 - 14;
 
     const r1 = ws.getRow(1).height || 18;
     const r2 = ws.getRow(2).height || 18;
     const r3 = ws.getRow(3).height || 18;
     const r4 = ws.getRow(4).height || 18;
-    const targetHpx = (r1 + r2 + r3 + r4) * 1.33 - 14; // padding verticale
+    const targetHpx = (r1 + r2 + r3 + r4) * 1.33 - 14;
 
     const scale = Math.min(targetWpx / logoW, targetHpx / logoH);
     const drawW = Math.max(10, Math.floor(logoW * scale));
@@ -364,7 +362,7 @@ async function buildExcelAndDownload() {
     });
 
     ws.addImage(imageId, {
-      tl: { col: 0.18, row: 0.20 }, // leggero padding
+      tl: { col: 0.18, row: 0.20 },
       ext: { width: drawW, height: drawH }
     });
   } catch (e) {
@@ -385,13 +383,12 @@ async function buildExcelAndDownload() {
       const cell = ws.getCell(r, c);
       cell.border = borderAll("thin");
       cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
-      if (c >= 3 && cell.value == null) cell.value = ""; // pulizia area CDE
+      if (c >= 3 && cell.value == null) cell.value = "";
     }
   }
 
   ws.getRow(10).height = 10;
 
-  // Tabella
   const startRow = 11;
 
   ws.getCell(`A${startRow}`).value = "Codice";
@@ -419,7 +416,6 @@ async function buildExcelAndDownload() {
     ws.getCell(`B${r}`).alignment = { vertical: "middle", horizontal: "center" };
   });
 
-  // cornice “modulo” anche su CDE (esteticamente pulito)
   const endRow = startRow + items.length;
   for (let r = startRow; r <= endRow; r++) {
     for (let c = 3; c <= 5; c++) {
@@ -509,13 +505,18 @@ function resetAll() {
 }
 
 /* =========================
-   Scanner Barcode (camera)
+   Scanner Barcode (camera) — OTTIMIZZATO + TORCIA AUTO
    ========================= */
 let activeCodeInput = null;
 let scanStream = null;
-let scanTimer = null;
+let scanTrack = null;     // ✅ track video (per torch/focus)
+let scanTimer = null;     // (non più usato, ma lo lascio per compat)
 let barcodeDetector = null;
 let lastDetected = { value: null, ts: 0 };
+
+// ✅ Loop più fluido: no overlap async
+let scanStop = false;
+let scanRunning = false;
 
 const cropCanvas = document.createElement("canvas");
 const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
@@ -555,13 +556,14 @@ async function openScannerFor(codeInput) {
     return;
   }
 
+  // ✅ Riduciamo formati per velocità (aggiungi QR solo se ti serve)
   barcodeDetector = new window.BarcodeDetector({
-    formats: ["code_39", "code_128", "ean_13", "ean_8", "itf", "upc_a", "upc_e", "qr_code"],
+    formats: ["code_128", "code_39", "ean_13", "ean_8", "itf", "upc_a", "upc_e"],
   });
 
   els.scanModal.classList.add("open");
   els.scanModal.setAttribute("aria-hidden", "false");
-  setScanPill("Richiesta permesso fotocamera…", true);
+  setScanPill("Apro fotocamera…", true);
   els.lastCodePill.textContent = "Ultimo: —";
   lastDetected = { value: null, ts: 0 };
 
@@ -580,11 +582,31 @@ async function openScannerFor(codeInput) {
     els.scanVideo.srcObject = scanStream;
     await els.scanVideo.play();
 
-    const track = scanStream.getVideoTracks()[0];
-    const caps = track.getCapabilities?.() || {};
+    scanTrack = scanStream.getVideoTracks()[0];
+    const caps = scanTrack.getCapabilities?.() || {};
+
+    // ✅ Autofocus/Exposure/WB continui (se supportati)
+    try {
+      await scanTrack.applyConstraints({
+        advanced: [
+          { focusMode: "continuous" },
+          { exposureMode: "continuous" },
+          { whiteBalanceMode: "continuous" },
+        ]
+      });
+    } catch {}
+
+    // ✅ Zoom leggero (troppo zoom rallenta e sfoca)
     if (caps.zoom) {
-      const targetZoom = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 2));
-      await track.applyConstraints({ advanced: [{ zoom: targetZoom }] }).catch(() => {});
+      const targetZoom = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.2));
+      await scanTrack.applyConstraints({ advanced: [{ zoom: targetZoom }] }).catch(() => {});
+    }
+
+    // ✅ TORCIA automatica (se supportata)
+    if (caps.torch) {
+      try {
+        await scanTrack.applyConstraints({ advanced: [{ torch: true }] });
+      } catch {}
     }
 
     setScanPill("Tieni il barcode ORIZZONTALE nel riquadro", true);
@@ -597,49 +619,65 @@ async function openScannerFor(codeInput) {
 
 function startDetectLoop() {
   stopDetectLoop();
+  scanStop = false;
+  scanRunning = false;
 
-  scanTimer = setInterval(async () => {
+  const tick = async () => {
+    if (scanStop) return;
+    if (scanRunning) { requestAnimationFrame(tick); return; }
+    scanRunning = true;
+
     const v = els.scanVideo;
-    if (!v || v.readyState < 2) return;
-
     try {
-      const vw = v.videoWidth, vh = v.videoHeight;
-      if (!vw || !vh) return;
+      if (v && v.readyState >= 2) {
+        const vw = v.videoWidth, vh = v.videoHeight;
+        if (vw && vh) {
+          // ✅ Crop più adatto a barcode ORIZZONTALE: più largo e più basso
+          const cropW = Math.floor(vw * 0.90);
+          const cropH = Math.floor(vh * 0.18);
+          const sx = Math.floor((vw - cropW) / 2);
+          const sy = Math.floor((vh - cropH) / 2);
 
-      const cropW = Math.floor(vw * 0.78);
-      const cropH = Math.floor(vh * 0.22);
-      const sx = Math.floor((vw - cropW) / 2);
-      const sy = Math.floor((vh - cropH) / 2);
+          cropCanvas.width = cropW;
+          cropCanvas.height = cropH;
+          cropCtx.drawImage(v, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
 
-      cropCanvas.width = cropW;
-      cropCanvas.height = cropH;
-      cropCtx.drawImage(v, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+          const barcodes = await barcodeDetector.detect(cropCanvas);
+          if (barcodes && barcodes.length) {
+            const raw = cleanCode(barcodes[0].rawValue);
+            if (raw) {
+              const now = Date.now();
+              if (!(lastDetected.value === raw && (now - lastDetected.ts) < 1200)) {
+                lastDetected = { value: raw, ts: now };
+                els.lastCodePill.textContent = `Ultimo: ${raw}`;
 
-      const barcodes = await barcodeDetector.detect(cropCanvas);
-      if (!barcodes || barcodes.length === 0) return;
+                if (activeCodeInput) {
+                  activeCodeInput.value = raw;
+                  const item = activeCodeInput.closest("[data-item]") || activeCodeInput.closest(".item");
+                  const qtyInput = item?.querySelector("[data-qty]") || item?.querySelector(".qty");
+                  if (qtyInput) qtyInput.focus();
+                }
 
-      const raw = cleanCode(barcodes[0].rawValue);
-      if (!raw) return;
-
-      const now = Date.now();
-      if (lastDetected.value === raw && (now - lastDetected.ts) < 1500) return;
-      lastDetected = { value: raw, ts: now };
-
-      els.lastCodePill.textContent = `Ultimo: ${raw}`;
-
-      if (activeCodeInput) {
-        activeCodeInput.value = raw;
-        const item = activeCodeInput.closest("[data-item]") || activeCodeInput.closest(".item");
-        const qtyInput = item?.querySelector("[data-qty]") || item?.querySelector(".qty");
-        if (qtyInput) qtyInput.focus();
+                await closeScanner();
+                scanRunning = false;
+                return;
+              }
+            }
+          }
+        }
       }
-
-      await closeScanner();
     } catch {}
-  }, 180);
+
+    scanRunning = false;
+    // ✅ ~30 fps (stabile e veloce)
+    setTimeout(() => requestAnimationFrame(tick), 33);
+  };
+
+  requestAnimationFrame(tick);
 }
 
 function stopDetectLoop() {
+  scanStop = true;
   if (scanTimer) {
     clearInterval(scanTimer);
     scanTimer = null;
@@ -649,10 +687,22 @@ function stopDetectLoop() {
 async function closeScanner() {
   stopDetectLoop();
 
+  // ✅ Spegni torcia esplicitamente (se possibile) prima di stop stream
+  try {
+    if (scanTrack) {
+      const caps = scanTrack.getCapabilities?.() || {};
+      if (caps.torch) {
+        await scanTrack.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {});
+      }
+    }
+  } catch {}
+
   if (scanStream) {
     scanStream.getTracks().forEach((t) => t.stop());
     scanStream = null;
   }
+  scanTrack = null;
+
   els.scanVideo.srcObject = null;
 
   els.scanModal.classList.remove("open");
@@ -686,6 +736,7 @@ els.items.addEventListener("click", (e) => {
   }
 });
 
+// Enter su quantità -> auto-add + scanner nuova riga
 els.items.addEventListener("keydown", (e) => {
   if (!e.target.matches("input[data-qty]")) return;
   if (e.key !== "Enter") return;
@@ -695,6 +746,7 @@ els.items.addEventListener("keydown", (e) => {
   if (row) maybeAddNextRowAndOpenScanner(row);
 });
 
+// Blur quantità -> stesso comportamento
 els.items.addEventListener(
   "blur",
   (e) => {
