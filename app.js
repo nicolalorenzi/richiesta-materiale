@@ -505,17 +505,18 @@ function resetAll() {
 }
 
 /* =========================
-   Scanner Barcode (camera) — OTTIMIZZATO + TORCIA AUTO (SOLO CODE_128)
+   Scanner Barcode (camera) — ROBUSTO + TORCIA AUTO (Android/Chrome)
    ========================= */
 let activeCodeInput = null;
 let scanStream = null;
-let scanTrack = null;     // ✅ track video (per torch/focus)
+let scanTrack = null;
 let barcodeDetector = null;
 let lastDetected = { value: null, ts: 0 };
 
-// ✅ Loop più fluido: no overlap async
 let scanStop = false;
 let scanRunning = false;
+let fullFrameEvery = 10;     // ogni N cicli prova anche frame intero
+let tickCount = 0;
 
 const cropCanvas = document.createElement("canvas");
 const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
@@ -530,17 +531,10 @@ function cleanCode(raw) {
 }
 
 async function tryLockLandscape() {
-  try {
-    if (screen.orientation && screen.orientation.lock) {
-      await screen.orientation.lock("landscape");
-    }
-  } catch {}
+  try { if (screen.orientation?.lock) await screen.orientation.lock("landscape"); } catch {}
 }
-
 async function unlockOrientation() {
-  try {
-    if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
-  } catch {}
+  try { if (screen.orientation?.unlock) screen.orientation.unlock(); } catch {}
 }
 
 async function openScannerFor(codeInput) {
@@ -555,7 +549,7 @@ async function openScannerFor(codeInput) {
     return;
   }
 
-  // ✅ SOLO Code128 = più veloce + più affidabile nel tuo caso
+  // ✅ SOLO CODE_128
   barcodeDetector = new window.BarcodeDetector({ formats: ["code_128"] });
 
   els.scanModal.classList.add("open");
@@ -563,6 +557,7 @@ async function openScannerFor(codeInput) {
   setScanPill("Apro fotocamera…", true);
   els.lastCodePill.textContent = "Ultimo: —";
   lastDetected = { value: null, ts: 0 };
+  tickCount = 0;
 
   await tryLockLandscape();
 
@@ -570,7 +565,7 @@ async function openScannerFor(codeInput) {
     scanStream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { ideal: "environment" },
-        width: { ideal: 1280 },    // ✅ meno pesante di 1920 ma qualità ok per barcode
+        width: { ideal: 1280 },     // ✅ più leggero di 1920, spesso più veloce
         height: { ideal: 720 },
       },
       audio: false,
@@ -582,28 +577,26 @@ async function openScannerFor(codeInput) {
     scanTrack = scanStream.getVideoTracks()[0];
     const caps = scanTrack.getCapabilities?.() || {};
 
-    // ✅ Autofocus/Exposure/WB continui (se supportati)
+    // ✅ continuous focus/exposure se supportato
     try {
       await scanTrack.applyConstraints({
         advanced: [
           { focusMode: "continuous" },
           { exposureMode: "continuous" },
           { whiteBalanceMode: "continuous" },
-        ]
+        ],
       });
     } catch {}
 
-    // ✅ Zoom leggerissimo (troppo zoom rallenta e sfoca)
+    // ✅ zoom leggerissimo (o niente)
     if (caps.zoom) {
-      const targetZoom = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.1));
+      const targetZoom = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.05));
       await scanTrack.applyConstraints({ advanced: [{ zoom: targetZoom }] }).catch(() => {});
     }
 
-    // ✅ TORCIA automatica (se supportata)
+    // ✅ torcia automatica
     if (caps.torch) {
-      try {
-        await scanTrack.applyConstraints({ advanced: [{ torch: true }] });
-      } catch {}
+      await scanTrack.applyConstraints({ advanced: [{ torch: true }] }).catch(() => {});
     }
 
     setScanPill("Tieni il barcode ORIZZONTALE nel riquadro", true);
@@ -625,24 +618,37 @@ function startDetectLoop() {
     scanRunning = true;
 
     const v = els.scanVideo;
+
     try {
       if (v && v.readyState >= 2) {
         const vw = v.videoWidth, vh = v.videoHeight;
         if (vw && vh) {
-          // ✅ Crop ottimizzato per barcode orizzontale tipo etichetta
-          // più stretto in altezza = meno pixel = più veloce
-          const cropW = Math.floor(vw * 0.85);
-          const cropH = Math.floor(vh * 0.12);
+          tickCount++;
+
+          // ✅ crop “sicuro”: abbastanza alto da non perdere il codice
+          const cropW = Math.floor(vw * 0.90);
+          const cropH = Math.floor(vh * 0.18);
           const sx = Math.floor((vw - cropW) / 2);
           const sy = Math.floor((vh - cropH) / 2);
 
+          let detected = null;
+
+          // 1) prova crop
           cropCanvas.width = cropW;
           cropCanvas.height = cropH;
           cropCtx.drawImage(v, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
 
-          const barcodes = await barcodeDetector.detect(cropCanvas);
-          if (barcodes && barcodes.length) {
-            const raw = cleanCode(barcodes[0].rawValue);
+          let barcodes = await barcodeDetector.detect(cropCanvas);
+          if (barcodes?.length) detected = barcodes[0];
+
+          // 2) fallback: ogni N cicli prova frame intero
+          if (!detected && (tickCount % fullFrameEvery === 0)) {
+            barcodes = await barcodeDetector.detect(v);
+            if (barcodes?.length) detected = barcodes[0];
+          }
+
+          if (detected?.rawValue) {
+            const raw = cleanCode(detected.rawValue);
             if (raw) {
               const now = Date.now();
               if (!(lastDetected.value === raw && (now - lastDetected.ts) < 1200)) {
@@ -653,7 +659,7 @@ function startDetectLoop() {
                   activeCodeInput.value = raw;
                   const item = activeCodeInput.closest("[data-item]") || activeCodeInput.closest(".item");
                   const qtyInput = item?.querySelector("[data-qty]") || item?.querySelector(".qty");
-                  if (qtyInput) qtyInput.focus();
+                  qtyInput?.focus();
                 }
 
                 await closeScanner();
@@ -667,9 +673,7 @@ function startDetectLoop() {
     } catch {}
 
     scanRunning = false;
-
-    // ✅ ~30fps, ma senza stressare troppo CPU
-    setTimeout(() => requestAnimationFrame(tick), 33);
+    setTimeout(() => requestAnimationFrame(tick), 60); // ~16fps (stabile e sufficiente)
   };
 
   requestAnimationFrame(tick);
@@ -682,7 +686,7 @@ function stopDetectLoop() {
 async function closeScanner() {
   stopDetectLoop();
 
-  // ✅ Spegni torcia esplicitamente (se possibile) prima di stop stream
+  // spegni torcia se possibile
   try {
     if (scanTrack) {
       const caps = scanTrack.getCapabilities?.() || {};
@@ -699,13 +703,13 @@ async function closeScanner() {
   scanTrack = null;
 
   els.scanVideo.srcObject = null;
-
   els.scanModal.classList.remove("open");
   els.scanModal.setAttribute("aria-hidden", "true");
 
   await unlockOrientation();
   activeCodeInput = null;
 }
+
 
 /* =========================
    Event delegation righe
