@@ -264,7 +264,7 @@ async function buildExcelAndDownload() {
 
   const ws = wb.addWorksheet("Ordine", {
     pageSetup: {
-      paperSize: 9,            // A4
+      paperSize: 9,
       orientation: "portrait",
       fitToPage: true,
       fitToWidth: 1,
@@ -279,7 +279,6 @@ async function buildExcelAndDownload() {
     header: 0.2, footer: 0.2
   };
 
-  // Colonne (layout modulo)
   ws.columns = [
     { width: 18 },  // A
     { width: 28 },  // B
@@ -288,20 +287,17 @@ async function buildExcelAndDownload() {
     { width: 18 },  // E
   ];
 
-  // ✅ Più spazio verticale al blocco logo (così si vede bene e non "esce")
   ws.getRow(1).height = 28;
   ws.getRow(2).height = 28;
   ws.getRow(3).height = 28;
   ws.getRow(4).height = 28;
 
-  // Header: logo A1:B4, titolo A5:E5, box doc info D1:E3
   ws.mergeCells("A1:B4");
   ws.mergeCells("A5:E5");
   ws.mergeCells("D1:E1");
   ws.mergeCells("D2:E2");
   ws.mergeCells("D3:E3");
 
-  // Bordo area header A1:E5
   for (let r = 1; r <= 5; r++) {
     for (let c = 1; c <= 5; c++) {
       const cell = ws.getCell(r, c);
@@ -310,13 +306,11 @@ async function buildExcelAndDownload() {
     }
   }
 
-  // Titolo
   const titleCell = ws.getCell("A5");
   titleCell.value = "ORDINE FORNITORE";
   titleCell.font = { bold: true, size: 14 };
   titleCell.alignment = { vertical: "middle", horizontal: "center" };
 
-  // Doc info (a destra)
   ws.getCell("D1").value = DOC_INFO.mod;
   ws.getCell("D2").value = DOC_INFO.rev;
   ws.getCell("D3").value = DOC_INFO.agg;
@@ -326,7 +320,7 @@ async function buildExcelAndDownload() {
     c.alignment = { vertical: "middle", horizontal: "right" };
   });
 
-  // ✅ Logo: "contain" automatico dentro A1:B4 (NO deformazione, NO overflow)
+  // Logo contain
   try {
     const logoBase64 = await fetchAsBase64(LOGO_URL);
     const ext = getLogoExtension(LOGO_URL);
@@ -334,10 +328,7 @@ async function buildExcelAndDownload() {
 
     const img = new Image();
     img.src = `data:${mime};base64,${logoBase64}`;
-    await new Promise((res, rej) => {
-      img.onload = res;
-      img.onerror = rej;
-    });
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
 
     const logoW = img.naturalWidth || 800;
     const logoH = img.naturalHeight || 300;
@@ -369,7 +360,6 @@ async function buildExcelAndDownload() {
     console.warn(e);
   }
 
-  // Dati fornitore / operatore / data
   ws.getCell("A7").value = "Fornitore:";
   ws.getCell("B7").value = supplier;
   ws.getCell("A8").value = "Operatore:";
@@ -505,7 +495,7 @@ function resetAll() {
 }
 
 /* =========================
-   Scanner Barcode (camera) — ROBUSTO + TORCIA AUTO (Android/Chrome)
+   Scanner Barcode — Code39(*) + Code128 + TORCIA AUTO (Android/Chrome)
    ========================= */
 let activeCodeInput = null;
 let scanStream = null;
@@ -515,9 +505,15 @@ let lastDetected = { value: null, ts: 0 };
 
 let scanStop = false;
 let scanRunning = false;
-let fullFrameEvery = 10;     // ogni N cicli prova anche frame intero
 let tickCount = 0;
 
+// tuning
+const TARGET_W = 1280;
+const TARGET_H = 720;
+const FULL_FRAME_EVERY = 8;     // ogni N tick prova frame intero
+const TICK_DELAY_MS = 45;       // più reattivo (≈20fps)
+
+// canvas per crop orizzontale
 const cropCanvas = document.createElement("canvas");
 const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
 
@@ -526,8 +522,12 @@ function setScanPill(text, ok = true) {
   els.scanPill.classList.toggle("bad", !ok);
 }
 
+// ✅ rimuove *...* (Code39) e spazi
 function cleanCode(raw) {
-  return (raw || "").trim().replace(/^\*+|\*+$/g, "").replace(/\s+/g, "");
+  return (raw || "")
+    .trim()
+    .replace(/^\*+|\*+$/g, "")
+    .replace(/\s+/g, "");
 }
 
 async function tryLockLandscape() {
@@ -549,8 +549,8 @@ async function openScannerFor(codeInput) {
     return;
   }
 
-  // ✅ SOLO CODE_128
-  barcodeDetector = new window.BarcodeDetector({ formats: ["code_128"] });
+  // ✅ SOLO questi due formati
+  barcodeDetector = new window.BarcodeDetector({ formats: ["code_39", "code_128"] });
 
   els.scanModal.classList.add("open");
   els.scanModal.setAttribute("aria-hidden", "false");
@@ -565,8 +565,8 @@ async function openScannerFor(codeInput) {
     scanStream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { ideal: "environment" },
-        width: { ideal: 1280 },     // ✅ più leggero di 1920, spesso più veloce
-        height: { ideal: 720 },
+        width: { ideal: TARGET_W },
+        height: { ideal: TARGET_H },
       },
       audio: false,
     });
@@ -577,7 +577,7 @@ async function openScannerFor(codeInput) {
     scanTrack = scanStream.getVideoTracks()[0];
     const caps = scanTrack.getCapabilities?.() || {};
 
-    // ✅ continuous focus/exposure se supportato
+    // continuous focus/exposure/whitebalance (se disponibili)
     try {
       await scanTrack.applyConstraints({
         advanced: [
@@ -588,13 +588,13 @@ async function openScannerFor(codeInput) {
       });
     } catch {}
 
-    // ✅ zoom leggerissimo (o niente)
+    // zoom leggero
     if (caps.zoom) {
-      const targetZoom = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.05));
+      const targetZoom = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.15));
       await scanTrack.applyConstraints({ advanced: [{ zoom: targetZoom }] }).catch(() => {});
     }
 
-    // ✅ torcia automatica
+    // torcia automatica
     if (caps.torch) {
       await scanTrack.applyConstraints({ advanced: [{ torch: true }] }).catch(() => {});
     }
@@ -617,23 +617,22 @@ function startDetectLoop() {
     if (scanRunning) { requestAnimationFrame(tick); return; }
     scanRunning = true;
 
-    const v = els.scanVideo;
-
     try {
+      const v = els.scanVideo;
       if (v && v.readyState >= 2) {
         const vw = v.videoWidth, vh = v.videoHeight;
         if (vw && vh) {
           tickCount++;
 
-          // ✅ crop “sicuro”: abbastanza alto da non perdere il codice
-          const cropW = Math.floor(vw * 0.90);
-          const cropH = Math.floor(vh * 0.18);
+          // ✅ crop orizzontale più “generoso” (migliora su Code39)
+          const cropW = Math.floor(vw * 0.92);
+          const cropH = Math.floor(vh * 0.26);
           const sx = Math.floor((vw - cropW) / 2);
           const sy = Math.floor((vh - cropH) / 2);
 
           let detected = null;
 
-          // 1) prova crop
+          // 1) crop
           cropCanvas.width = cropW;
           cropCanvas.height = cropH;
           cropCtx.drawImage(v, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
@@ -641,8 +640,8 @@ function startDetectLoop() {
           let barcodes = await barcodeDetector.detect(cropCanvas);
           if (barcodes?.length) detected = barcodes[0];
 
-          // 2) fallback: ogni N cicli prova frame intero
-          if (!detected && (tickCount % fullFrameEvery === 0)) {
+          // 2) fallback frame intero
+          if (!detected && (tickCount % FULL_FRAME_EVERY === 0)) {
             barcodes = await barcodeDetector.detect(v);
             if (barcodes?.length) detected = barcodes[0];
           }
@@ -651,7 +650,7 @@ function startDetectLoop() {
             const raw = cleanCode(detected.rawValue);
             if (raw) {
               const now = Date.now();
-              if (!(lastDetected.value === raw && (now - lastDetected.ts) < 1200)) {
+              if (!(lastDetected.value === raw && (now - lastDetected.ts) < 1100)) {
                 lastDetected = { value: raw, ts: now };
                 els.lastCodePill.textContent = `Ultimo: ${raw}`;
 
@@ -673,7 +672,7 @@ function startDetectLoop() {
     } catch {}
 
     scanRunning = false;
-    setTimeout(() => requestAnimationFrame(tick), 60); // ~16fps (stabile e sufficiente)
+    setTimeout(() => requestAnimationFrame(tick), TICK_DELAY_MS);
   };
 
   requestAnimationFrame(tick);
@@ -686,7 +685,7 @@ function stopDetectLoop() {
 async function closeScanner() {
   stopDetectLoop();
 
-  // spegni torcia se possibile
+  // spegni torcia
   try {
     if (scanTrack) {
       const caps = scanTrack.getCapabilities?.() || {};
@@ -710,7 +709,6 @@ async function closeScanner() {
   activeCodeInput = null;
 }
 
-
 /* =========================
    Event delegation righe
    ========================= */
@@ -725,7 +723,7 @@ els.items.addEventListener("click", (e) => {
 
   if (action === "del") {
     row.remove();
-    if (!els.items.children.length) addItemRow(); // sempre almeno 1 riga
+    if (!els.items.children.length) addItemRow();
     return;
   }
 
@@ -735,7 +733,6 @@ els.items.addEventListener("click", (e) => {
   }
 });
 
-// Enter su quantità -> auto-add + scanner nuova riga
 els.items.addEventListener("keydown", (e) => {
   if (!e.target.matches("input[data-qty]")) return;
   if (e.key !== "Enter") return;
@@ -745,7 +742,6 @@ els.items.addEventListener("keydown", (e) => {
   if (row) maybeAddNextRowAndOpenScanner(row);
 });
 
-// Blur quantità -> stesso comportamento
 els.items.addEventListener(
   "blur",
   (e) => {
@@ -767,7 +763,6 @@ els.scanModal.addEventListener("click", (e) => {
 els.addRow.addEventListener("click", () => addItemRow());
 els.generate.addEventListener("click", generateText);
 
-// ✅ ora async perché ExcelJS genera buffer
 els.emailExcel.addEventListener("click", async () => {
   try {
     const info = await buildExcelAndDownload();
