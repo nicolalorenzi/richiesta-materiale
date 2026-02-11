@@ -505,12 +505,11 @@ function resetAll() {
 }
 
 /* =========================
-   Scanner Barcode (camera) — OTTIMIZZATO + TORCIA AUTO
+   Scanner Barcode (camera) — OTTIMIZZATO + TORCIA AUTO (SOLO CODE_128)
    ========================= */
 let activeCodeInput = null;
 let scanStream = null;
 let scanTrack = null;     // ✅ track video (per torch/focus)
-let scanTimer = null;     // (non più usato, ma lo lascio per compat)
 let barcodeDetector = null;
 let lastDetected = { value: null, ts: 0 };
 
@@ -556,10 +555,8 @@ async function openScannerFor(codeInput) {
     return;
   }
 
-  // ✅ Riduciamo formati per velocità (aggiungi QR solo se ti serve)
-  barcodeDetector = new window.BarcodeDetector({
-    formats: ["code_128", "code_39", "ean_13", "ean_8", "itf", "upc_a", "upc_e"],
-  });
+  // ✅ SOLO Code128 = più veloce + più affidabile nel tuo caso
+  barcodeDetector = new window.BarcodeDetector({ formats: ["code_128"] });
 
   els.scanModal.classList.add("open");
   els.scanModal.setAttribute("aria-hidden", "false");
@@ -573,8 +570,8 @@ async function openScannerFor(codeInput) {
     scanStream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { ideal: "environment" },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
+        width: { ideal: 1280 },    // ✅ meno pesante di 1920 ma qualità ok per barcode
+        height: { ideal: 720 },
       },
       audio: false,
     });
@@ -596,9 +593,9 @@ async function openScannerFor(codeInput) {
       });
     } catch {}
 
-    // ✅ Zoom leggero (troppo zoom rallenta e sfoca)
+    // ✅ Zoom leggerissimo (troppo zoom rallenta e sfoca)
     if (caps.zoom) {
-      const targetZoom = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.2));
+      const targetZoom = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.1));
       await scanTrack.applyConstraints({ advanced: [{ zoom: targetZoom }] }).catch(() => {});
     }
 
@@ -632,9 +629,10 @@ function startDetectLoop() {
       if (v && v.readyState >= 2) {
         const vw = v.videoWidth, vh = v.videoHeight;
         if (vw && vh) {
-          // ✅ Crop più adatto a barcode ORIZZONTALE: più largo e più basso
-          const cropW = Math.floor(vw * 0.90);
-          const cropH = Math.floor(vh * 0.18);
+          // ✅ Crop ottimizzato per barcode orizzontale tipo etichetta
+          // più stretto in altezza = meno pixel = più veloce
+          const cropW = Math.floor(vw * 0.85);
+          const cropH = Math.floor(vh * 0.12);
           const sx = Math.floor((vw - cropW) / 2);
           const sy = Math.floor((vh - cropH) / 2);
 
@@ -669,7 +667,8 @@ function startDetectLoop() {
     } catch {}
 
     scanRunning = false;
-    // ✅ ~30 fps (stabile e veloce)
+
+    // ✅ ~30fps, ma senza stressare troppo CPU
     setTimeout(() => requestAnimationFrame(tick), 33);
   };
 
@@ -678,10 +677,6 @@ function startDetectLoop() {
 
 function stopDetectLoop() {
   scanStop = true;
-  if (scanTimer) {
-    clearInterval(scanTimer);
-    scanTimer = null;
-  }
 }
 
 async function closeScanner() {
