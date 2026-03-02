@@ -568,11 +568,19 @@ async function openScannerFor(codeInput) {
     },
     locator: {
       patchSize: "medium",
-      halfSample: true,
+      halfSample: false, // Usa risoluzione piena (più preciso per codici rovinati/piccoli)
     },
     numOfWorkers: 2,
     decoder: {
-      readers: ["code_128_reader", "code_39_reader"],
+      // Aggiunti altri formati comuni per logistica interna e retail
+      readers: [
+        "code_128_reader",
+        "code_39_reader",
+        "codabar_reader",
+        "ean_reader",
+        "ean_8_reader",
+        "upc_reader"
+      ],
     },
     locate: true,
   }, function(err) {
@@ -603,15 +611,6 @@ async function openScannerFor(codeInput) {
       c.style.top = "0";
       c.style.left = "0";
     }
-
-    // Tentativo attivazione torcia
-    try {
-      const track = Quagga.CameraAccess.getActiveTrack();
-      if (track) {
-         const caps = track.getCapabilities ? track.getCapabilities() : {};
-         if (caps.torch) track.applyConstraints({ advanced: [{ torch: true }] }).catch(()=>{});
-      }
-    } catch(e){}
   });
 
   Quagga.onDetected(onQuaggaDetected);
