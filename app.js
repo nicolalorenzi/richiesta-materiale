@@ -498,24 +498,7 @@ function resetAll() {
    Scanner Barcode — Code39(*) + Code128 + TORCIA AUTO (Android/Chrome)
    ========================= */
 let activeCodeInput = null;
-let scanStream = null;
-let scanTrack = null;
-let barcodeDetector = null;
 let lastDetected = { value: null, ts: 0 };
-
-let scanStop = false;
-let scanRunning = false;
-let tickCount = 0;
-
-// tuning
-const TARGET_W = 1280;
-const TARGET_H = 720;
-const FULL_FRAME_EVERY = 8;     // ogni N tick prova frame intero
-const TICK_DELAY_MS = 45;       // più reattivo (≈20fps)
-
-// canvas per crop orizzontale
-const cropCanvas = document.createElement("canvas");
-const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
 
 function setScanPill(text, ok = true) {
   els.scanPill.textContent = text;
@@ -537,226 +520,148 @@ async function unlockOrientation() {
   try { if (screen.orientation?.unlock) screen.orientation.unlock(); } catch {}
 }
 
-async function ensureBarcodeDetectorPolyfill() {
-  if ("BarcodeDetector" in window) return;
-
+async function loadQuagga() {
+  if (window.Quagga) return;
   setScanPill("Caricamento libreria scanner...", true);
-
-  // Carica ZXing da CDN se manca
-  if (!window.ZXing) {
+  if (!window.Quagga) {
     await new Promise((resolve, reject) => {
       const s = document.createElement("script");
-      s.src = "https://unpkg.com/@zxing/library@0.18.6/umd/index.min.js";
+      s.src = "https://unpkg.com/@ericblade/quagga2@1.8.4/dist/quagga.min.js";
       s.onload = resolve;
       s.onerror = reject;
       document.head.append(s);
     });
   }
-
-  // Crea un wrapper compatibile con BarcodeDetector
-  window.BarcodeDetector = class {
-    constructor(opts = {}) {
-      const ZX = window.ZXing;
-      const hints = new Map();
-      const formats = opts.formats || [];
-      const zxFormats = [];
-      
-      if (formats.includes("code_39")) zxFormats.push(ZX.BarcodeFormat.CODE_39);
-      if (formats.includes("code_128")) zxFormats.push(ZX.BarcodeFormat.CODE_128);
-      
-      if (zxFormats.length) hints.set(ZX.DecodeHintType.POSSIBLE_FORMATS, zxFormats);
-      hints.set(ZX.DecodeHintType.TRY_HARDER, true);
-      
-      this.reader = new ZX.BrowserMultiFormatReader(hints);
-    }
-    
-    async detect(source) {
-      // source: HTMLVideoElement | HTMLCanvasElement
-      // Su iOS usiamo solo il cropCanvas per performance e stabilità
-      if (source.nodeName === "VIDEO") return [];
-      
-      try {
-        const res = await this.reader.decodeFromCanvas(source);
-        return [{ rawValue: res.getText() }];
-      } catch (e) {
-        return [];
-      }
-    }
-  };
 }
 
 async function openScannerFor(codeInput) {
   activeCodeInput = codeInput;
 
-  if (!navigator.mediaDevices?.getUserMedia) {
-    alert("Fotocamera non disponibile su questo browser.");
+  try {
+    await loadQuagga();
+  } catch (e) {
+    alert("Errore caricamento libreria scanner.");
     return;
   }
-
-  // Se manca BarcodeDetector (es. iPhone), carichiamo il polyfill
-  if (!("BarcodeDetector" in window)) {
-    try {
-      await ensureBarcodeDetectorPolyfill();
-    } catch (e) {
-      alert("Scanner non supportato o errore caricamento libreria.");
-      return;
-    }
-  }
-
-  // ✅ SOLO questi due formati
-  barcodeDetector = new window.BarcodeDetector({ formats: ["code_39", "code_128"] });
 
   els.scanModal.classList.add("open");
   els.scanModal.setAttribute("aria-hidden", "false");
   setScanPill("Apro fotocamera…", true);
   els.lastCodePill.textContent = "Ultimo: —";
   lastDetected = { value: null, ts: 0 };
-  tickCount = 0;
+
+  // Nascondiamo il video originale, Quagga ne crea uno suo nel container
+  if (els.scanVideo) els.scanVideo.style.display = "none";
 
   await tryLockLandscape();
 
-  try {
-    scanStream = await navigator.mediaDevices.getUserMedia({
-      video: {
+  Quagga.init({
+    inputStream: {
+      name: "Live",
+      type: "LiveStream",
+      target: document.querySelector(".video-wrap"), // Container
+      constraints: {
+        width: 1280,
+        height: 720,
         facingMode: { ideal: "environment" },
-        width: { ideal: TARGET_W },
-        height: { ideal: TARGET_H },
       },
-      audio: false,
-    });
+    },
+    locator: {
+      patchSize: "medium",
+      halfSample: true,
+    },
+    numOfWorkers: 2,
+    decoder: {
+      readers: ["code_128_reader", "code_39_reader"],
+    },
+    locate: true,
+  }, function(err) {
+    if (!els.scanModal.classList.contains("open")) return; // Utente ha chiuso nel frattempo
+    if (err) {
+      console.error(err);
+      setScanPill("Errore fotocamera", false);
+      return;
+    }
+    Quagga.start();
+    setScanPill("Inquadra il codice", true);
 
-    els.scanVideo.srcObject = scanStream;
-    els.scanVideo.setAttribute("playsinline", "true"); // Fix fondamentale per iOS
-    await els.scanVideo.play();
-
-    scanTrack = scanStream.getVideoTracks()[0];
-    const caps = scanTrack.getCapabilities?.() || {};
-
-    // continuous focus/exposure/whitebalance (se disponibili)
-    try {
-      await scanTrack.applyConstraints({
-        advanced: [
-          { focusMode: "continuous" },
-          { exposureMode: "continuous" },
-          { whiteBalanceMode: "continuous" },
-        ],
-      });
-    } catch {}
-
-    // zoom leggero
-    if (caps.zoom) {
-      const targetZoom = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.15));
-      await scanTrack.applyConstraints({ advanced: [{ zoom: targetZoom }] }).catch(() => {});
+    // Fix stile elementi generati da Quagga
+    const wrap = document.querySelector(".video-wrap");
+    const v = wrap.querySelector("video");
+    const c = wrap.querySelector("canvas");
+    if (v) {
+      v.setAttribute("playsinline", "true");
+      v.style.width = "100%";
+      v.style.height = "100%";
+      v.style.objectFit = "cover";
+    }
+    if (c) {
+      c.style.width = "100%";
+      c.style.height = "100%";
+      c.style.objectFit = "cover";
+      c.style.position = "absolute";
+      c.style.top = "0";
+      c.style.left = "0";
     }
 
-    // torcia automatica
-    if (caps.torch) {
-      await scanTrack.applyConstraints({ advanced: [{ torch: true }] }).catch(() => {});
-    }
-
-    setScanPill("Tieni il barcode ORIZZONTALE nel riquadro", true);
-    startDetectLoop();
-  } catch (e) {
-    console.error(e);
-    setScanPill("Permesso negato o errore fotocamera", false);
-  }
-}
-
-function startDetectLoop() {
-  stopDetectLoop();
-  scanStop = false;
-  scanRunning = false;
-
-  const tick = async () => {
-    if (scanStop) return;
-    if (scanRunning) { requestAnimationFrame(tick); return; }
-    scanRunning = true;
-
+    // Tentativo attivazione torcia
     try {
-      const v = els.scanVideo;
-      if (v && v.readyState >= 2) {
-        const vw = v.videoWidth, vh = v.videoHeight;
-        if (vw && vh) {
-          tickCount++;
-
-          // ✅ crop orizzontale più “generoso” (migliora su Code39)
-          const cropW = Math.floor(vw * 0.92);
-          const cropH = Math.floor(vh * 0.26);
-          const sx = Math.floor((vw - cropW) / 2);
-          const sy = Math.floor((vh - cropH) / 2);
-
-          let detected = null;
-
-          // 1) crop
-          cropCanvas.width = cropW;
-          cropCanvas.height = cropH;
-          cropCtx.drawImage(v, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
-
-          let barcodes = await barcodeDetector.detect(cropCanvas);
-          if (barcodes?.length) detected = barcodes[0];
-
-          // 2) fallback frame intero
-          if (!detected && (tickCount % FULL_FRAME_EVERY === 0)) {
-            barcodes = await barcodeDetector.detect(v);
-            if (barcodes?.length) detected = barcodes[0];
-          }
-
-          if (detected?.rawValue) {
-            const raw = cleanCode(detected.rawValue);
-            if (raw) {
-              const now = Date.now();
-              if (!(lastDetected.value === raw && (now - lastDetected.ts) < 1100)) {
-                lastDetected = { value: raw, ts: now };
-                els.lastCodePill.textContent = `Ultimo: ${raw}`;
-
-                if (activeCodeInput) {
-                  activeCodeInput.value = raw;
-                  const item = activeCodeInput.closest("[data-item]") || activeCodeInput.closest(".item");
-                  const qtyInput = item?.querySelector("[data-qty]") || item?.querySelector(".qty");
-                  qtyInput?.focus();
-                }
-
-                await closeScanner();
-                scanRunning = false;
-                return;
-              }
-            }
-          }
-        }
+      const track = Quagga.CameraAccess.getActiveTrack();
+      if (track) {
+         const caps = track.getCapabilities ? track.getCapabilities() : {};
+         if (caps.torch) track.applyConstraints({ advanced: [{ torch: true }] }).catch(()=>{});
       }
-    } catch {}
+    } catch(e){}
+  });
 
-    scanRunning = false;
-    setTimeout(() => requestAnimationFrame(tick), TICK_DELAY_MS);
-  };
-
-  requestAnimationFrame(tick);
+  Quagga.onDetected(onQuaggaDetected);
 }
 
-function stopDetectLoop() {
-  scanStop = true;
+function onQuaggaDetected(data) {
+  const code = data.codeResult.code;
+  if (!code) return;
+  
+  const raw = cleanCode(code);
+  if (!raw) return;
+
+  const now = Date.now();
+  // Debounce 1s
+  if (lastDetected.value === raw && (now - lastDetected.ts) < 1000) return;
+
+  lastDetected = { value: raw, ts: now };
+  els.lastCodePill.textContent = `Ultimo: ${raw}`;
+
+  if (activeCodeInput) {
+    activeCodeInput.value = raw;
+    const item = activeCodeInput.closest("[data-item]") || activeCodeInput.closest(".item");
+    const qtyInput = item?.querySelector("[data-qty]") || item?.querySelector(".qty");
+    qtyInput?.focus();
+  }
+
+  closeScanner();
 }
 
 async function closeScanner() {
-  stopDetectLoop();
-
-  // spegni torcia
-  try {
-    if (scanTrack) {
-      const caps = scanTrack.getCapabilities?.() || {};
-      if (caps.torch) {
-        await scanTrack.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {});
-      }
-    }
-  } catch {}
-
-  if (scanStream) {
-    scanStream.getTracks().forEach((t) => t.stop());
-    scanStream = null;
+  if (window.Quagga) {
+    Quagga.stop();
+    Quagga.offDetected(onQuaggaDetected);
   }
-  scanTrack = null;
+  
+  // Rimuovi elementi creati da Quagga
+  const wrap = document.querySelector(".video-wrap");
+  if (wrap) {
+    const v = wrap.querySelector("video");
+    const c = wrap.querySelector("canvas");
+    if (v) v.remove();
+    if (c) c.remove();
+  }
 
-  els.scanVideo.srcObject = null;
+  // Ripristina video originale (anche se vuoto)
+  if (els.scanVideo) {
+    els.scanVideo.srcObject = null;
+    els.scanVideo.style.display = "";
+  }
+
   els.scanModal.classList.remove("open");
   els.scanModal.setAttribute("aria-hidden", "true");
 
