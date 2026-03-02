@@ -683,8 +683,31 @@ async function nativeLoop() {
 }
 
 // --- GESTIONE COMUNE ---
+let beepCtx = null;
+function initAudio() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  if (!beepCtx) beepCtx = new Ctx();
+  if (beepCtx.state === "suspended") beepCtx.resume();
+}
+
+function playBeep() {
+  if (!beepCtx) return;
+  try {
+    const osc = beepCtx.createOscillator();
+    const gain = beepCtx.createGain();
+    osc.connect(gain);
+    gain.connect(beepCtx.destination);
+    osc.frequency.value = 1200; // Frequenza in Hz (beep acuto)
+    gain.gain.value = 0.1;      // Volume basso (10%)
+    osc.start();
+    setTimeout(() => { osc.stop(); }, 100); // Durata 100ms
+  } catch (e) {}
+}
+
 async function openScannerFor(codeInput) {
   activeCodeInput = codeInput;
+  initAudio(); // Prepara l'audio al click (fondamentale per iOS)
   els.scanModal.classList.add("open");
   els.scanModal.setAttribute("aria-hidden", "false");
   setScanPill("Avvio fotocamera…", true);
@@ -716,6 +739,9 @@ function handleDetectedCode(rawCode) {
   const now = Date.now();
   // Debounce 1.5s per evitare letture doppie
   if (lastDetected.value === raw && (now - lastDetected.ts) < 1500) return;
+
+  playBeep();
+  if (navigator.vibrate) navigator.vibrate(200);
 
   lastDetected = { value: raw, ts: now };
   els.lastCodePill.textContent = `Ultimo: ${raw}`;
