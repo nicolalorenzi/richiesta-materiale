@@ -4,7 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=0" />
   <title>Richiesta Materiale</title>
-  <meta name="theme-color" content="#111111" />
   <link rel="stylesheet" href="./style.css" />
   <script src="https://cdn.jsdelivr.net/npm/exceljs/dist/exceljs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
@@ -12,51 +11,45 @@
 </head>
 <body>
   <div class="app">
-    <div class="card no-print">
+    <div class="card">
       <h1>Richiesta Materiale</h1>
       <div class="row">
         <div>
-          <label for="supplier">Fornitore</label>
-          <input id="supplier" placeholder="Es. Casappa" autocomplete="off" />
+          <label>Fornitore</label>
+          <input id="supplier" placeholder="Es. Casappa">
         </div>
         <div>
-          <label for="operator">Operatore</label>
-          <input id="operator" placeholder="Es. Marco" />
+          <label>Operatore</label>
+          <input id="operator" placeholder="Tuo nome">
         </div>
       </div>
 
-      <div class="items" id="items"></div>
+      <div id="items"></div>
 
-      <div style="margin-top:12px; display: flex; gap: 8px; flex-wrap: wrap;">
-        <button class="primary" id="addRow" type="button">+ Aggiungi Riga</button>
-        <button id="generate" type="button">Genera Testo</button>
-        <button id="emailExcel" type="button" style="background:#28a745; color:white;">Invia Email + Excel</button>
-        <button class="danger" id="reset" type="button">Svuota</button>
+      <div class="actions">
+        <button class="primary" id="addRow">+ Riga</button>
+        <button id="emailExcel" class="success">Invia Email + Excel</button>
+        <button class="danger" id="reset">Svuota</button>
       </div>
     </div>
 
-    <div class="card" style="margin-top:14px;">
-      <h1 style="text-transform:none;">Output Testo</h1>
-      <textarea id="output" placeholder="Il testo apparirà qui..." rows="5"></textarea>
-      <button id="copy" style="margin-top:8px; width:100%;">Copia Testo</button>
+    <div class="card">
+      <textarea id="output" rows="5" placeholder="Testo generato..."></textarea>
+      <button id="copy" style="width:100%; margin-top:10px;">Copia Testo</button>
     </div>
   </div>
 
-  <div class="modal" id="scanModal">
+  <div id="scanModal" class="modal">
     <div class="modal-card">
       <div class="modal-head">
-        <strong>Inquadra il Codice</strong>
-        <button class="danger" id="closeScan" type="button">Chiudi</button>
+        <strong>Scansiona</strong>
+        <button class="danger" id="closeScan">X</button>
       </div>
-      <div class="modal-body">
-        <div class="video-wrap">
-          <video id="scanVideo" playsinline autoplay muted></video>
-          <div class="scanner-laser"></div>
-        </div>
-        <div class="scan-status">
-          <span class="pill" id="scanPill">In attesa...</span>
-        </div>
+      <div class="video-wrap">
+        <video id="scanVideo" playsinline autoplay muted></video>
+        <div class="laser"></div>
       </div>
+      <div id="scanPill" class="status-pill">Inizializzazione...</div>
     </div>
   </div>
 
