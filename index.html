@@ -2,23 +2,18 @@
 <html lang="it">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Richiesta Materiale (Interna)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=0" />
+  <title>Richiesta Materiale</title>
   <meta name="theme-color" content="#111111" />
-
   <link rel="stylesheet" href="./style.css" />
-
-  <!-- XLSX (SheetJS) per generare Excel client-side -->
   <script src="https://cdn.jsdelivr.net/npm/exceljs/dist/exceljs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
-
+  <script src="https://unpkg.com/@zxing/library@latest"></script>
 </head>
-
 <body>
   <div class="app">
     <div class="card no-print">
-      <h1>Richiesta interna materiale</h1>
-
+      <h1>Richiesta Materiale</h1>
       <div class="row">
         <div>
           <label for="supplier">Fornitore</label>
@@ -26,63 +21,45 @@
         </div>
         <div>
           <label for="operator">Operatore</label>
-          <input id="operator" placeholder="Es. Marco Rossi" autocomplete="name" />
+          <input id="operator" placeholder="Es. Marco" />
         </div>
       </div>
 
       <div class="items" id="items"></div>
 
-      <div style="margin-top:12px;">
-        <button class="ghost" id="addRow" type="button">+ Aggiungi riga</button>
-      </div>
-
-      <hr style="border:0;border-top:1px solid #eee;margin:16px 0;" />
-
-      <div class="btns">
-        <button class="primary" id="generate" type="button">Genera richiesta</button>
-        <button class="ghost" id="emailExcel" type="button">Invia per email (Excel)</button>
-        <button class="ghost" id="copy" type="button">Copia testo</button>
-        <button class="ghost" id="share" type="button">Condividi</button>
-        <button class="ghost" id="print" type="button">Stampa</button>
+      <div style="margin-top:12px; display: flex; gap: 8px; flex-wrap: wrap;">
+        <button class="primary" id="addRow" type="button">+ Aggiungi Riga</button>
+        <button id="generate" type="button">Genera Testo</button>
+        <button id="emailExcel" type="button" style="background:#28a745; color:white;">Invia Email + Excel</button>
         <button class="danger" id="reset" type="button">Svuota</button>
-      </div>
-
-      <div class="muted">
-        Nessun dato viene salvato. Per l’email: l’app genera e scarica l’Excel, poi apre la mail (l’allegato va aggiunto manualmente).
       </div>
     </div>
 
     <div class="card" style="margin-top:14px;">
-      <h1 style="text-transform:none;">Output</h1>
-      <label for="output">Testo richiesta</label>
-      <textarea id="output" placeholder="Premi “Genera richiesta”…"></textarea>
+      <h1 style="text-transform:none;">Output Testo</h1>
+      <textarea id="output" placeholder="Il testo apparirà qui..." rows="5"></textarea>
+      <button id="copy" style="margin-top:8px; width:100%;">Copia Testo</button>
     </div>
   </div>
 
-  <!-- Scanner Modal -->
-  <div class="modal" id="scanModal" aria-hidden="true">
+  <div class="modal" id="scanModal">
     <div class="modal-card">
       <div class="modal-head">
-        <strong>Scansiona barcode (orizzontale)</strong>
+        <strong>Inquadra il Codice</strong>
         <button class="danger" id="closeScan" type="button">Chiudi</button>
       </div>
       <div class="modal-body">
         <div class="video-wrap">
-          <video id="scanVideo" playsinline></video>
-          <div class="hint" aria-hidden="true"></div>
+          <video id="scanVideo" playsinline autoplay muted></video>
+          <div class="scanner-laser"></div>
         </div>
         <div class="scan-status">
-          <span class="pill" id="scanPill">Avvio fotocamera…</span>
-          <span class="pill" id="lastCodePill">Ultimo: —</span>
-        </div>
-        <div class="muted" style="margin-top:8px;">
-          Ruota il telefono in orizzontale, inquadra il codice dentro il riquadro e resta fermo 1–2 secondi.
+          <span class="pill" id="scanPill">In attesa...</span>
         </div>
       </div>
     </div>
   </div>
 
-  <script defer src="./app.js"></script>
+  <script src="./app.js"></script>
 </body>
 </html>
-
