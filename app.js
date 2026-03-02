@@ -1,122 +1,118 @@
 const EMAIL_TO = "acquisti@oleodinamicaseguini.it";
+const LOGO_URL = "./logo.jpg";
 const codeReader = new ZXing.BrowserMultiFormatReader();
-let selectedDeviceId;
 let activeInput = null;
 
-const els = {
-  items: document.getElementById('items'),
-  addRow: document.getElementById('addRow'),
-  generate: document.getElementById('generate'),
-  output: document.getElementById('output'),
-  copy: document.getElementById('copy'),
-  reset: document.getElementById('reset'),
-  scanModal: document.getElementById('scanModal'),
-  closeScan: document.getElementById('closeScan'),
-  scanVideo: document.getElementById('scanVideo'),
-  scanPill: document.getElementById('scanPill'),
-  emailExcel: document.getElementById('emailExcel')
-};
+// Riferimenti DOM
+const itemsContainer = document.getElementById('items');
+const scanModal = document.getElementById('scanModal');
+const scanVideo = document.getElementById('scanVideo');
 
-// --- Inizializzazione ---
+// Funzione per aggiungere riga
 function addItemRow(code = "", qty = "") {
-  const div = document.createElement('div');
-  div.className = 'item-grid';
-  div.innerHTML = `
-    <div>
-      <label>Codice Articolo</label>
-      <div style="display:flex; gap:5px;">
-        <input class="code-input" value="${code}" placeholder="Scansiona o scrivi...">
-        <button type="button" class="scan-btn" style="background:#ddd;">📷</button>
-      </div>
-    </div>
-    <div>
-      <label>Qtà</label>
-      <input type="number" class="qty-input" value="${qty}" placeholder="0">
-    </div>
-    <button type="button" class="danger delete-btn">X</button>
-  `;
-  els.items.appendChild(div);
+    const div = document.createElement('div');
+    div.className = 'item-grid';
+    div.innerHTML = `
+        <div>
+            <div style="display:flex; gap:4px;">
+                <input class="code-input" value="${code}" placeholder="Codice">
+                <button type="button" class="scan-trigger" style="background:#eee;">📷</button>
+            </div>
+        </div>
+        <div><input type="number" class="qty-input" value="${qty}" placeholder="Q.tà"></div>
+        <button class="danger del-row">X</button>
+    `;
+    itemsContainer.appendChild(div);
 }
 
-// --- Logica Scanner (Ottimizzata iPhone) ---
-async function openScanner(inputEl) {
-  activeInput = inputEl;
-  els.scanModal.classList.add('open');
-  els.scanPill.textContent = "Accesso fotocamera...";
-
-  try {
-    const videoDevices = await codeReader.listVideoInputDevices();
-    // Seleziona la fotocamera posteriore
-    selectedDeviceId = videoDevices.length > 1 ? videoDevices[1].deviceId : videoDevices[0].deviceId;
-    
-    els.scanPill.textContent = "Inquadra il codice...";
-    
-    codeReader.decodeFromVideoDevice(selectedDeviceId, 'scanVideo', (result, err) => {
-      if (result) {
-        activeInput.value = result.text;
-        vibratePhone();
+// Logica Scanner
+async function startScan(input) {
+    activeInput = input;
+    scanModal.classList.add('open');
+    try {
+        const devices = await codeReader.listVideoInputDevices();
+        const backCamera = devices.find(d => d.label.toLowerCase().includes('back')) || devices[0];
+        
+        codeReader.decodeFromVideoDevice(backCamera.deviceId, 'scanVideo', (result) => {
+            if (result) {
+                activeInput.value = result.text;
+                if(navigator.vibrate) navigator.vibrate(100);
+                closeScanner();
+                generateText(); // Aggiorna l'output
+            }
+        });
+    } catch (err) {
+        alert("Errore fotocamera: " + err);
         closeScanner();
-      }
-    });
-  } catch (err) {
-    console.error(err);
-    alert("Errore fotocamera: " + err);
-    closeScanner();
-  }
+    }
 }
 
 function closeScanner() {
-  codeReader.reset();
-  els.scanModal.classList.remove('open');
-  activeInput = null;
+    codeReader.reset();
+    scanModal.classList.remove('open');
 }
 
-function vibratePhone() {
-  if (navigator.vibrate) navigator.vibrate(200);
+// Genera il testo per l'anteprima
+function generateText() {
+    const supplier = document.getElementById('supplier').value;
+    const operator = document.getElementById('operator').value;
+    let txt = `Richiesta Materiale\nFornitore: ${supplier}\nOperatore: ${operator}\n\n`;
+    
+    document.querySelectorAll('.item-grid').forEach(row => {
+        const c = row.querySelector('.code-input').value;
+        const q = row.querySelector('.qty-input').value;
+        if(c) txt += `- ${c} (Qtà: ${q})\n`;
+    });
+    document.getElementById('output').value = txt;
 }
 
-// --- Event Listeners ---
-els.addRow.addEventListener('click', () => addItemRow());
+// Funzione Excel (Recuperata dal tuo vecchio codice)
+async function sendExcel() {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Richiesta');
+    
+    // Aggiungi dati
+    worksheet.addRow(["RICHIESTA MATERIALE"]);
+    worksheet.addRow(["Fornitore:", document.getElementById('supplier').value]);
+    worksheet.addRow(["Operatore:", document.getElementById('operator').value]);
+    worksheet.addRow([]);
+    worksheet.addRow(["Codice Articolo", "Quantità"]);
 
-els.items.addEventListener('click', (e) => {
-  if (e.target.classList.contains('delete-btn')) {
-    e.target.closest('.item-grid').remove();
-  }
-  if (e.target.classList.contains('scan-btn')) {
-    const input = e.target.parentElement.querySelector('.code-input');
-    openScanner(input);
-  }
-});
+    document.querySelectorAll('.item-grid').forEach(row => {
+        const c = row.querySelector('.code-input').value;
+        const q = row.querySelector('.qty-input').value;
+        if(c) worksheet.addRow([c, q]);
+    });
 
-els.closeScan.addEventListener('click', closeScanner);
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    saveAs(blob, "Richiesta_Materiale.xlsx");
 
-els.reset.addEventListener('click', () => {
-  if (confirm("Vuoi svuotare tutto?")) {
-    els.items.innerHTML = "";
-    els.output.value = "";
-    addItemRow();
-  }
-});
+    // Apri Email
+    const subject = `Richiesta Materiale - ${document.getElementById('supplier').value}`;
+    const body = encodeURIComponent(document.getElementById('output').value + "\n\n(L'allegato Excel è stato scaricato, caricalo manualmente)");
+    window.location.href = `mailto:${EMAIL_TO}?subject=${subject}&body=${body}`;
+}
 
-els.generate.addEventListener('click', () => {
-  const rows = [...document.querySelectorAll('.item-grid')];
-  let text = `Richiesta da: ${document.getElementById('operator').value || 'N/D'}\n`;
-  text += `Fornitore: ${document.getElementById('supplier').value || 'N/D'}\n\n`;
-  
-  rows.forEach(row => {
-    const code = row.querySelector('.code-input').value;
-    const qty = row.querySelector('.qty-input').value;
-    if (code) text += `- ${code} (Qtà: ${qty})\n`;
-  });
-  
-  els.output.value = text;
-});
+// Eventi
+document.getElementById('addRow').onclick = () => addItemRow();
+document.getElementById('closeScan').onclick = closeScanner;
+document.getElementById('emailExcel').onclick = sendExcel;
+document.getElementById('copy').onclick = () => {
+    document.getElementById('output').select();
+    document.execCommand('copy');
+    alert("Copiato!");
+};
+document.getElementById('reset').onclick = () => { if(confirm("Svuoto?")) location.reload(); };
 
-els.copy.addEventListener('click', () => {
-  els.output.select();
-  document.execCommand('copy');
-  alert("Copiato!");
-});
+// Gestione click su righe (per cancella e scanner)
+itemsContainer.onclick = (e) => {
+    if(e.target.classList.contains('del-row')) e.target.closest('.item-grid').remove();
+    if(e.target.classList.contains('scan-trigger')) {
+        const inp = e.target.closest('.item-grid').querySelector('.code-input');
+        startScan(inp);
+    }
+};
 
-// Avvia con una riga vuota
+// Avvio
 addItemRow();
