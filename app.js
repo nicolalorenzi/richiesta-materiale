@@ -495,7 +495,7 @@ function resetAll() {
 }
 
 /* =========================
-   Scanner Barcode — Code39(*) + Code128 + TORCIA AUTO (Android/Chrome)
+   Scanner Barcode — Code39(*) + Code128
    ========================= */
 let activeCodeInput = null;
 let lastDetected = { value: null, ts: 0 };
@@ -611,6 +611,14 @@ async function openScannerFor(codeInput) {
       c.style.top = "0";
       c.style.left = "0";
     }
+
+    // Forza disattivazione torcia per evitare riflessi
+    try {
+      const track = Quagga.CameraAccess.getActiveTrack();
+      if (track) {
+        track.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {});
+      }
+    } catch (e) {}
   });
 
   Quagga.onDetected(onQuaggaDetected);
