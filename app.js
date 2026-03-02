@@ -495,10 +495,14 @@ function resetAll() {
 }
 
 /* =========================
-   Scanner Barcode — Code39(*) + Code128
+   Scanner Barcode — Ibrido (Nativo Android + Quagga iOS)
    ========================= */
 let activeCodeInput = null;
 let lastDetected = { value: null, ts: 0 };
+let scannerMode = null; // "native" | "quagga"
+let nativeStream = null;
+let nativeDetector = null;
+let nativeLoopRunning = false;
 
 function setScanPill(text, ok = true) {
   els.scanPill.textContent = text;
@@ -520,40 +524,23 @@ async function unlockOrientation() {
   try { if (screen.orientation?.unlock) screen.orientation.unlock(); } catch {}
 }
 
+// --- QUAGGA (Fallback per iOS/Safari) ---
 async function loadQuagga() {
   if (window.Quagga) return;
   setScanPill("Caricamento libreria scanner...", true);
-  if (!window.Quagga) {
-    await new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = "https://unpkg.com/@ericblade/quagga2@1.8.4/dist/quagga.min.js";
-      s.onload = resolve;
-      s.onerror = reject;
-      document.head.append(s);
-    });
-  }
+  await new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://unpkg.com/@ericblade/quagga2@1.8.4/dist/quagga.min.js";
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.append(s);
+  });
 }
 
-async function openScannerFor(codeInput) {
-  activeCodeInput = codeInput;
-
-  try {
-    await loadQuagga();
-  } catch (e) {
-    alert("Errore caricamento libreria scanner.");
-    return;
-  }
-
-  els.scanModal.classList.add("open");
-  els.scanModal.setAttribute("aria-hidden", "false");
-  setScanPill("Apro fotocamera…", true);
-  els.lastCodePill.textContent = "Ultimo: —";
-  lastDetected = { value: null, ts: 0 };
-
+function startQuagga() {
+  scannerMode = "quagga";
   // Nascondiamo il video originale, Quagga ne crea uno suo nel container
   if (els.scanVideo) els.scanVideo.style.display = "none";
-
-  await tryLockLandscape();
 
   Quagga.init({
     inputStream: {
@@ -568,23 +555,23 @@ async function openScannerFor(codeInput) {
     },
     locator: {
       patchSize: "medium",
-      halfSample: false, // Usa risoluzione piena (più preciso per codici rovinati/piccoli)
+      halfSample: false,
     },
     numOfWorkers: 2,
     decoder: {
-      // Aggiunti altri formati comuni per logistica interna e retail
       readers: [
         "code_128_reader",
         "code_39_reader",
         "codabar_reader",
         "ean_reader",
         "ean_8_reader",
-        "upc_reader"
+        "upc_reader",
+        "i2of5_reader" // Interleaved 2 of 5
       ],
     },
     locate: true,
   }, function(err) {
-    if (!els.scanModal.classList.contains("open")) return; // Utente ha chiuso nel frattempo
+    if (!els.scanModal.classList.contains("open")) return;
     if (err) {
       console.error(err);
       setScanPill("Errore fotocamera", false);
@@ -593,7 +580,7 @@ async function openScannerFor(codeInput) {
     Quagga.start();
     setScanPill("Inquadra il codice", true);
 
-    // Fix stile elementi generati da Quagga
+    // Fix CSS elementi Quagga
     const wrap = document.querySelector(".video-wrap");
     const v = wrap.querySelector("video");
     const c = wrap.querySelector("canvas");
@@ -612,7 +599,7 @@ async function openScannerFor(codeInput) {
       c.style.left = "0";
     }
 
-    // Forza disattivazione torcia per evitare riflessi
+    // Spegni torcia
     try {
       const track = Quagga.CameraAccess.getActiveTrack();
       if (track) {
@@ -625,15 +612,110 @@ async function openScannerFor(codeInput) {
 }
 
 function onQuaggaDetected(data) {
-  const code = data.codeResult.code;
-  if (!code) return;
+  handleDetectedCode(data.codeResult.code);
+}
+
+// --- NATIVE (Android/Chrome) ---
+async function startNative() {
+  scannerMode = "native";
+  try {
+    // Abilita TUTTI i formati supportati dal dispositivo (include Codabar, Code39, EAN, ecc.)
+    const supported = await window.BarcodeDetector.getSupportedFormats();
+    nativeDetector = new window.BarcodeDetector({ formats: supported });
+
+    nativeStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1920 }, // Risoluzione alta per codici piccoli
+        height: { ideal: 1080 }
+      },
+      audio: false
+    });
+
+    els.scanVideo.srcObject = nativeStream;
+    els.scanVideo.style.display = "block";
+    await els.scanVideo.play();
+
+    // Configurazione avanzata fotocamera (Focus continuo + NO Torcia)
+    const track = nativeStream.getVideoTracks()[0];
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    const constraints = { advanced: [] };
+
+    if (caps.focusMode?.includes("continuous")) {
+      constraints.advanced.push({ focusMode: "continuous" });
+    }
+    if (caps.torch) {
+      constraints.advanced.push({ torch: false }); // Torcia SPENTA
+    }
+    if (constraints.advanced.length > 0) {
+      await track.applyConstraints(constraints).catch(e => console.log("Vincoli non applicati", e));
+    }
+
+    setScanPill("Inquadra il codice", true);
+    nativeLoopRunning = true;
+    requestAnimationFrame(nativeLoop);
+
+  } catch (e) {
+    console.error("Errore nativo:", e);
+    // Se fallisce il nativo, prova Quagga come fallback
+    try {
+      await loadQuagga();
+      startQuagga();
+    } catch (err) {
+      alert("Errore avvio scanner: " + e.message);
+      closeScanner();
+    }
+  }
+}
+
+async function nativeLoop() {
+  if (!nativeLoopRunning) return;
+  try {
+    if (els.scanVideo.readyState === 4) {
+      const codes = await nativeDetector.detect(els.scanVideo);
+      if (codes.length > 0) {
+        handleDetectedCode(codes[0].rawValue);
+      }
+    }
+  } catch (e) {}
   
-  const raw = cleanCode(code);
+  if (nativeLoopRunning) requestAnimationFrame(nativeLoop);
+}
+
+// --- GESTIONE COMUNE ---
+async function openScannerFor(codeInput) {
+  activeCodeInput = codeInput;
+  els.scanModal.classList.add("open");
+  els.scanModal.setAttribute("aria-hidden", "false");
+  setScanPill("Avvio fotocamera…", true);
+  els.lastCodePill.textContent = "Ultimo: —";
+  lastDetected = { value: null, ts: 0 };
+
+  await tryLockLandscape();
+
+  // SELEZIONE MOTORE:
+  // Se c'è BarcodeDetector (Android/Chrome), usalo (è nativo e veloce).
+  // Altrimenti usa Quagga (iOS).
+  if ("BarcodeDetector" in window) {
+    await startNative();
+  } else {
+    try {
+      await loadQuagga();
+      startQuagga();
+    } catch (e) {
+      alert("Impossibile caricare scanner.");
+      closeScanner();
+    }
+  }
+}
+
+function handleDetectedCode(rawCode) {
+  const raw = cleanCode(rawCode);
   if (!raw) return;
 
   const now = Date.now();
-  // Debounce 1s
-  if (lastDetected.value === raw && (now - lastDetected.ts) < 1000) return;
+  // Debounce 1.5s per evitare letture doppie
+  if (lastDetected.value === raw && (now - lastDetected.ts) < 1500) return;
 
   lastDetected = { value: raw, ts: now };
   els.lastCodePill.textContent = `Ultimo: ${raw}`;
@@ -649,17 +731,26 @@ function onQuaggaDetected(data) {
 }
 
 async function closeScanner() {
-  if (window.Quagga) {
+  // Stop Quagga
+  if (scannerMode === "quagga" && window.Quagga) {
     Quagga.stop();
     Quagga.offDetected(onQuaggaDetected);
   }
   
+  // Stop Nativo
+  nativeLoopRunning = false;
+  if (nativeStream) {
+    nativeStream.getTracks().forEach(t => t.stop());
+    nativeStream = null;
+  }
+
   // Rimuovi elementi creati da Quagga
   const wrap = document.querySelector(".video-wrap");
   if (wrap) {
-    const v = wrap.querySelector("video");
+    // Nota: non rimuoviamo il video originale #scanVideo, solo quelli extra se creati
     const c = wrap.querySelector("canvas");
-    if (v) v.remove();
+    const vQuagga = wrap.querySelector("video:not(#scanVideo)");
+    if (vQuagga) vQuagga.remove();
     if (c) c.remove();
   }
 
@@ -669,6 +760,7 @@ async function closeScanner() {
     els.scanVideo.style.display = "";
   }
 
+  scannerMode = null;
   els.scanModal.classList.remove("open");
   els.scanModal.setAttribute("aria-hidden", "true");
 
